@@ -1,0 +1,59 @@
+# The bridge, as configuration instead of a script.
+#
+# WHAT THIS REPLACES
+#   scripts/gpu-headroom-bridge.sh -- a bash loop on the presenter's laptop. That
+#   works for a demo but has no leader election, no restarts, no metrics, dies with
+#   the terminal, and races anyone who runs `kubectl scale` on gpu-buffer. This is
+#   the same logic as an in-cluster, declarative object with none of that.
+#
+# WHY A BRIDGE IS NEEDED AT ALL (not a workaround -- a structural gap)
+#   HAMi's mutating webhook injects `nvidia.com/gpucores: 100` into EVERY pod that
+#   requests nvidia.com/gpu. Karpenter decides what to launch by simulating nodes
+#   from the EC2 instance-type catalogue, which has no such resource, so it logs
+#   "no instance type has enough resources" and provisions NOTHING. Verified:
+#   GPU pods left Pending on a full card produced zero NodeClaims.
+#
+#   Sharing a card REQUIRES that injected resource, so GPU pods are permanently
+#   invisible to Karpenter. Something must translate GPU demand into a resource
+#   Karpenter understands (plain cpu/memory). KEDA does that translation here.
+#
+# HOW IT WORKS
+#   The built-in `kubernetes-workload` scaler counts pods matching podSelector:
+#       replicas = ceil( (pods matching selector) / value )
+#   value = 4 = HAMi deviceSplitCount, so one warm card is held per 4 GPU
+#   workloads. The scaler counts Pending AND Running pods (it excludes only
+#   Succeeded/Failed), so capacity is added BEFORE pods pile up -- better than the
+#   script, which only reacted to pods already stuck Pending.
+#
+#   Scaling gpu-buffer up -> a cpu-only pod goes Pending -> Karpenter adds a card.
+#   Scaling it down -> Karpenter consolidates the idle card. Bidirectional, hands-off.
+#
+# REQUIREMENT: GPU workloads must carry `workload: gpu` (02-train-job.yaml and
+# 03-gpu-load.yaml both do). The ScaledObject is namespace-scoped -- KEDA only
+# counts pods in ITS OWN namespace, so keep workloads and this object together.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: gpu-headroom
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: gpu-buffer               # the cpu-only balloon Deployment
+  minReplicaCount: 1               # ALWAYS keep one card warm
+  maxReplicaCount: 4               # safety cap (also bounded by NodePool limits)
+  # NOTE: pollingInterval / cooldownPeriod are deliberately omitted -- KEDA only
+  # honours them when minReplicaCount is 0 (scale-to-zero) and warns otherwise.
+  # With minReplicaCount: 1 the underlying HPA drives the cadence (~15s sync),
+  # so tune reaction speed through the behavior block below instead.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0     # react immediately to new demand
+        scaleDown:
+          stabilizationWindowSeconds: 120   # but shrink calmly
+  triggers:
+    - type: kubernetes-workload
+      metadata:
+        podSelector: 'workload=gpu'   # every GPU workload, whatever its app label
+        value: '4'                    # = hami_device_split_count

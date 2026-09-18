@@ -1,0 +1,39 @@
+# Lightweight GPU workload for the SCALE-OUT demo (Demo 2).
+#
+# Why not the PyTorch job here: that image is ~5 GB, and every NEW Karpenter node
+# pulls it from scratch -- minutes of dead air on stage. This uses the small CUDA
+# base image (~250 MB) so a freshly provisioned card runs pods in seconds.
+#
+# Use the real PyTorch job (02-train-job.yaml) for Demo 1 on the pre-warmed card,
+# where the image is already cached, and use THIS to drive fleet scaling live:
+#
+#   kubectl scale deploy gpu-load --replicas=6      # overload -> Karpenter adds a card
+#
+# Each pod requests only nvidia.com/gpu:1 and therefore gets the cluster default
+# slice (defaultMemory=3800 MiB), which it prints on startup to prove the cap.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-load
+  labels: { app: gpu-load }
+spec:
+  replicas: 4                              # one card's worth (deviceSplitCount=4)
+  selector: { matchLabels: { app: gpu-load } }
+  template:
+    metadata: { labels: { app: gpu-load, workload: gpu } }   # workload=gpu -> counted by KEDA
+    spec:
+      priorityClassName: gpu-workload      # HIGH -> evicts balloon pods
+      nodeSelector: { pool: karpenter }
+      containers:
+        - name: gpu
+          image: <AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/nvidia/cuda:12.2.0-base-ubuntu22.04
+          command:
+            - sh
+            - -c
+            - |
+              echo "=== $(hostname) sees this GPU slice ==="
+              nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+              while true; do nvidia-smi --query-gpu=memory.used --format=csv,noheader; sleep 30; done
+          resources:
+            limits:
+              nvidia.com/gpu: 1            # -> hard-capped 3800 MiB slice

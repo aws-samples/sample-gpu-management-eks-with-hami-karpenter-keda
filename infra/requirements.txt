@@ -1,0 +1,7 @@
+# CDK app dependencies.
+# The kubectl layer package MUST match the cluster's Kubernetes minor version
+# (config.k8s_version). If you change the cluster version, switch this to the
+# matching aws-cdk.lambda-layer-kubectl-vNN and update the import in the stack.
+aws-cdk-lib>=2.174.0,<3.0.0
+constructs>=10.0.0,<11.0.0
+aws-cdk.lambda-layer-kubectl-v36>=2.0.0,<3.0.0

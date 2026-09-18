@@ -1,0 +1,16 @@
+{
+  "_comment": "Public images mirrored into private ECR for the air-gapped cluster. 'repo' MUST match the HAMi chart's image.repository fields so global.imageRegistry=<ECR> repoints them. Consumed by scripts/mirror-images.sh (crane copy) and infra/stacks/eks_hami_stack.py (ECR repos + Helm values).",
+  "images": [
+    { "source": "docker.io/projecthami/hami:v2.10.0",                 "repo": "projecthami/hami",              "tag": "v2.10.0" },
+    { "source": "registry.k8s.io/kube-scheduler:v1.36.0",             "repo": "google_containers/kube-scheduler", "tag": "v1.36.0" },
+    { "source": "docker.io/liangjw/kube-webhook-certgen:v1.1.1",      "repo": "liangjw/kube-webhook-certgen",  "tag": "v1.1.1" },
+    { "source": "docker.io/jettech/kube-webhook-certgen:v1.5.2",      "repo": "jettech/kube-webhook-certgen",  "tag": "v1.5.2" },
+    { "source": "docker.io/nvidia/cuda:12.2.0-base-ubuntu22.04",      "repo": "nvidia/cuda",                   "tag": "12.2.0-base-ubuntu22.04" },
+    { "source": "public.ecr.aws/karpenter/controller:1.14.1",         "repo": "karpenter/controller",          "tag": "1.14.1" },
+    { "source": "registry.k8s.io/autoscaling/cluster-autoscaler:v1.36.1", "repo": "autoscaling/cluster-autoscaler", "tag": "v1.36.1" },
+    { "source": "docker.io/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime", "repo": "pytorch/pytorch", "tag": "2.3.0-cuda12.1-cudnn8-runtime" },
+    { "source": "ghcr.io/kedacore/keda:2.20.2",                     "repo": "kedacore/keda",                 "tag": "2.20.2" },
+    { "source": "ghcr.io/kedacore/keda-metrics-apiserver:2.20.2",   "repo": "kedacore/keda-metrics-apiserver", "tag": "2.20.2" },
+    { "source": "ghcr.io/kedacore/keda-admission-webhooks:2.20.2",  "repo": "kedacore/keda-admission-webhooks", "tag": "2.20.2" }
+  ]
+}

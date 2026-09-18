@@ -1,0 +1,37 @@
+# Python / CDK
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+cdk.out/
+infra/cdk.out/
+.cdk.staging/
+# CDK context caches account-specific lookups — never publish
+cdk.context.json
+infra/cdk.context.json
+
+# Third-party binaries: fetched locally by the user, not vendored (see docs/01-prerequisites.md)
+tools/
+
+# Third-party Helm charts: fetched by scripts/fetch-charts.sh, not vendored
+infra/charts/
+
+# Rendered manifests contain a real account ID after substitution
+manifests/rendered/
+
+# Local presentation material, not part of the sample
+presentation/
+
+# Credentials / kubeconfig — never commit
+kubeconfig
+*.kubeconfig
+*.pem
+*.key
+credentials
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

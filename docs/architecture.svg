@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="760" viewBox="0 0 1000 760" font-family="Amazon Ember, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#5a6b7b"/>
+    </marker>
+    <style>
+      .h    { font-size:13px; font-weight:700; fill:#0f1b2d; }
+      .lbl  { font-size:12px; fill:#233; }
+      .sub  { font-size:11px; fill:#455; }
+      .tag  { font-size:10.5px; fill:#5a6b7b; }
+      .white{ fill:#fff; }
+      .flow { stroke:#5a6b7b; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+      .flowd{ stroke:#5a6b7b; stroke-width:1.6; fill:none; stroke-dasharray:5 4; marker-end:url(#arrow); }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <rect x="0" y="0" width="1000" height="46" fill="#232f3e"/>
+  <text x="20" y="28" class="white" font-size="17" font-weight="700">HAMi on air-gapped Amazon EKS 1.36 — as deployed</text>
+  <text x="640" y="28" class="white" font-size="12" opacity="0.8">us-east-1 · account <account-id> · deployed 2026-08-31</text>
+
+  <!-- Operator workstation (outside AWS) -->
+  <rect x="18" y="150" width="176" height="96" rx="8" fill="#eef2f6" stroke="#8aa0b4"/>
+  <text x="106" y="176" text-anchor="middle" class="h">Your workstation</text>
+  <text x="106" y="198" text-anchor="middle" class="sub">kubectl · aws CLI</text>
+  <text x="106" y="214" text-anchor="middle" class="sub">session-manager-plugin</text>
+  <text x="106" y="234" text-anchor="middle" class="tag">no route into the VPC</text>
+
+  <!-- SSM tunnel arrow into bastion -->
+  <path class="flowd" d="M194,196 C 230,196 235,300 288,300"/>
+  <text x="196" y="188" class="tag">SSM port-forward</text>
+  <text x="196" y="264" class="tag">localhost:6443 → API</text>
+
+  <!-- AWS region container -->
+  <rect x="214" y="66" width="772" height="676" rx="10" fill="none" stroke="#ec7211" stroke-width="1.5"/>
+  <text x="230" y="86" class="h" fill="#ec7211">AWS Cloud — Region us-east-1</text>
+
+  <!-- EKS control plane (managed, outside VPC) -->
+  <rect x="240" y="98" width="720" height="52" rx="8" fill="#fbe9dd" stroke="#ec7211"/>
+  <text x="600" y="120" text-anchor="middle" class="h">Amazon EKS control plane (AWS-managed)</text>
+  <text x="600" y="138" text-anchor="middle" class="sub">Kubernetes 1.36 · API endpoint = PRIVATE only (public access off)</text>
+
+  <!-- VPC -->
+  <rect x="240" y="166" width="720" height="560" rx="10" fill="#f3f8fd" stroke="#2b6cb0" stroke-dasharray="6 4"/>
+  <text x="256" y="186" class="h" fill="#2b6cb0">VPC 10.0.0.0/16 — isolated subnets only · NO Internet Gateway · NO NAT</text>
+
+  <!-- Private ECR -->
+  <rect x="612" y="200" width="330" height="86" rx="8" fill="#e7f0e9" stroke="#3a8a53"/>
+  <text x="777" y="222" text-anchor="middle" class="h">Amazon ECR (private) — 5 mirrored repos</text>
+  <text x="777" y="240" text-anchor="middle" class="sub">projecthami/hami · google_containers/kube-scheduler:v1.36.0</text>
+  <text x="777" y="256" text-anchor="middle" class="sub">liangjw + jettech kube-webhook-certgen · nvidia/cuda</text>
+  <text x="777" y="274" text-anchor="middle" class="tag">populated by crane mirror (no Docker Hub creds)</text>
+
+  <!-- SSM bastion -->
+  <rect x="256" y="270" width="200" height="70" rx="8" fill="#eef2f6" stroke="#8aa0b4"/>
+  <text x="356" y="294" text-anchor="middle" class="h">SSM bastion</text>
+  <text x="356" y="312" text-anchor="middle" class="sub">t3.small · no inbound SG</text>
+  <text x="356" y="328" text-anchor="middle" class="tag">reaches private API on 443</text>
+  <!-- bastion -> control plane -->
+  <path class="flow" d="M356,270 C 356,210 470,150 560,150"/>
+
+  <!-- System node group -->
+  <rect x="256" y="360" width="330" height="120" rx="8" fill="#fff" stroke="#8aa0b4"/>
+  <text x="421" y="382" text-anchor="middle" class="h">System node group — t3.large ×2</text>
+  <rect x="272" y="394" width="298" height="30" rx="5" fill="#eef2f6"/>
+  <text x="421" y="414" text-anchor="middle" class="lbl">CoreDNS · cluster add-ons</text>
+  <rect x="272" y="430" width="298" height="40" rx="5" fill="#e8ecfb" stroke="#5b6fd6"/>
+  <text x="421" y="447" text-anchor="middle" class="lbl">HAMi scheduler + mutating webhook</text>
+  <text x="421" y="462" text-anchor="middle" class="tag">bundled kube-scheduler v1.36.0</text>
+
+  <!-- GPU node group -->
+  <rect x="612" y="310" width="330" height="200" rx="8" fill="#fff" stroke="#8aa0b4"/>
+  <text x="777" y="332" text-anchor="middle" class="h">GPU node group — g4dn.xlarge (label gpu=on)</text>
+  <text x="777" y="348" text-anchor="middle" class="sub">AL2023 NVIDIA AMI · drivers + nvidia runtime</text>
+  <rect x="628" y="356" width="298" height="30" rx="5" fill="#e8ecfb" stroke="#5b6fd6"/>
+  <text x="777" y="376" text-anchor="middle" class="lbl">HAMi device plugin (advertises vGPUs)</text>
+  <!-- one physical GPU split into 3 slices -->
+  <rect x="628" y="394" width="298" height="104" rx="6" fill="#fef6e6" stroke="#ec7211"/>
+  <text x="777" y="410" text-anchor="middle" class="sub">1 physical NVIDIA T4 (16 GiB) → sliced</text>
+  <rect x="638" y="418" width="90" height="66" rx="5" fill="#fff" stroke="#c98a3a"/>
+  <text x="683" y="446" text-anchor="middle" class="lbl">pod A</text>
+  <text x="683" y="462" text-anchor="middle" class="tag">4 GiB / 30%</text>
+  <rect x="732" y="418" width="90" height="66" rx="5" fill="#fff" stroke="#c98a3a"/>
+  <text x="777" y="446" text-anchor="middle" class="lbl">pod B</text>
+  <text x="777" y="462" text-anchor="middle" class="tag">4 GiB / 30%</text>
+  <rect x="826" y="418" width="90" height="66" rx="5" fill="#fff" stroke="#c98a3a"/>
+  <text x="871" y="446" text-anchor="middle" class="lbl">pod C</text>
+  <text x="871" y="462" text-anchor="middle" class="tag">6 GiB / 40%</text>
+
+  <!-- scheduler schedules onto GPU node -->
+  <path class="flow" d="M586,430 C 600,430 600,371 626,371"/>
+  <text x="556" y="500" class="tag">HAMi places sliced</text>
+  <text x="556" y="514" class="tag">pods onto the T4</text>
+
+  <!-- VPC endpoints -->
+  <rect x="256" y="560" width="686" height="150" rx="8" fill="#eaf3ee" stroke="#3a8a53"/>
+  <text x="599" y="582" text-anchor="middle" class="h">AWS PrivateLink — 13 VPC endpoints (only egress path)</text>
+  <text x="272" y="606" class="sub">Interface: ECR api · ECR dkr · STS · EC2 · EKS · Lambda · CloudWatch Logs · ELB · Autoscaling</text>
+  <text x="272" y="624" class="sub">Interface: SSM · SSMMessages · EC2Messages   |   Gateway: S3</text>
+  <text x="272" y="648" class="tag">• ECR (+S3) endpoints → nodes pull all container images privately from ECR</text>
+  <text x="272" y="666" class="tag">• SSM/SSMMessages/EC2Messages → bastion connectivity (no inbound ports)</text>
+  <text x="272" y="684" class="tag">• Lambda + EKS + STS → in-VPC kubectl/Helm provider that installs HAMi &amp; aws-auth</text>
+
+  <!-- nodes -> endpoints -> ECR (image pulls) -->
+  <path class="flow" d="M777,510 C 777,530 777,540 777,558"/>
+  <path class="flow" d="M700,560 C 760,300 760,290 760,288"/>
+  <text x="792" y="540" class="tag">image pulls</text>
+</svg>

@@ -1,0 +1,66 @@
+# Balloon / headroom pods -- the BRIDGE that lets Karpenter scale a HAMi fleet.
+#
+# WHY THESE REQUEST NO GPU (the whole point, verified on-cluster 2026-09-10):
+#   HAMi's mutating webhook rewrites ANY pod that asks for nvidia.com/gpu, adding
+#   `nvidia.com/gpucores: 100` to its spec. Karpenter simulates candidate nodes
+#   from EC2 instance-type data, which has no such resource, so it concludes
+#   "no instance type has enough resources" and NEVER provisions. Measured:
+#   2 GPU pods left Pending on a full card produced ZERO NodeClaims.
+#
+#   A pod with no nvidia.com/* resource is left alone by the webhook, so Karpenter
+#   sees a plain cpu/memory request it CAN satisfy -> it launches a GPU node
+#   (the NodePool only offers g4dn.xlarge).
+#
+# ONE BALLOON PER NODE -- enforced by ANTI-AFFINITY, not by hogging CPU.
+#   An earlier version requested `cpu: 3` so that two balloons could not fit on one
+#   4-vCPU g4dn.xlarge. It worked, but it fenced off 76% of the node: measured
+#   3150m of 3920m allocatable reserved, leaving only 770m for real GPU workloads.
+#   That is fine for synthetic-tensor demo jobs (~150m) but starves real training,
+#   where DataLoader workers, image decode and augmentation all want CPU.
+#
+#   requiredDuringScheduling anti-affinity on hostname gives the same one-per-node
+#   guarantee *explicitly*, so the request can drop to 100m and ~3670m stays
+#   available for actual work. A second replica still cannot land on an occupied
+#   node, so it goes Pending and Karpenter still adds a card -- Karpenter's
+#   scheduling simulation honours podAntiAffinity.
+#
+# replicas = number of cards kept warm. KEDA owns this field in normal operation
+# (examples/buffer/04-keda-scaledobject.yaml) -- don't `kubectl scale` it by hand.
+#
+#   kubectl apply -f examples/buffer/00-priorityclasses.yaml
+#   kubectl apply -f examples/buffer/01-buffer-pods.yaml
+#   kubectl get nodeclaims -w
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-buffer
+  labels: { app: gpu-buffer }
+spec:
+  replicas: 1                            # = number of warm cards
+  selector: { matchLabels: { app: gpu-buffer } }
+  template:
+    metadata: { labels: { app: gpu-buffer } }
+    spec:
+      priorityClassName: gpu-buffer
+      terminationGracePeriodSeconds: 0   # evict instantly when preempted
+      nodeSelector: { pool: karpenter }  # the GPU lane Karpenter owns
+      affinity:
+        podAntiAffinity:
+          # Hard rule: never two balloons on the same node. This is what makes
+          # replicas == warm cards, and what makes replica N+1 go Pending (which
+          # is the signal Karpenter acts on).
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: gpu-buffer }
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: pause
+          image: <AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/nvidia/cuda:12.2.0-base-ubuntu22.04
+          command: ["sh", "-c", "sleep infinity"]
+          resources:
+            requests:
+              # Deliberately small. NO nvidia.com/* -- that absence is what keeps
+              # the pod visible to Karpenter. One-per-node comes from anti-affinity
+              # above, so there is no reason to reserve CPU real workloads need.
+              cpu: "100m"
+              memory: "128Mi"

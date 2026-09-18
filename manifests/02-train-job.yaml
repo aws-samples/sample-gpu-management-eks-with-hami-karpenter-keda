@@ -1,0 +1,54 @@
+# A REAL GPU workload: a small CNN training loop on synthetic data (no external
+# weights/data needed). Hard-capped to a 4 GiB / 25% vGPU slice, high priority so
+# it preempts a buffer pod for instant placement. Uses generateName so you can
+# submit a batch:  for i in $(seq 6); do kubectl create -f 02-train-job.yaml; done
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: train-
+  labels: { app: train }
+spec:
+  backoffLimit: 0
+  template:
+    metadata: { labels: { app: train, workload: gpu } }   # workload=gpu -> counted by KEDA
+    spec:
+      priorityClassName: gpu-workload
+      restartPolicy: Never
+      nodeSelector: { pool: karpenter }
+      containers:
+      - name: trainer
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+        command:
+        - python
+        - -c
+        - |
+          import torch, torch.nn as nn, time
+          d = "cuda"
+          props = torch.cuda.get_device_properties(0)
+          print(f"GPU={torch.cuda.get_device_name(0)}  visible_mem={props.total_memory/1024**2:.0f}MiB", flush=True)
+          model = nn.Sequential(
+              nn.Conv2d(3, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+              nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+              nn.Flatten(), nn.Linear(128 * 8 * 8, 256), nn.ReLU(), nn.Linear(256, 10),
+          ).to(d)
+          opt = torch.optim.Adam(model.parameters())
+          lossf = nn.CrossEntropyLoss()
+          x = torch.randn(256, 3, 32, 32, device=d)
+          y = torch.randint(0, 10, (256,), device=d)
+          t = time.time()
+          for step in range(3000):
+              opt.zero_grad(); loss = lossf(model(x), y); loss.backward(); opt.step()
+              if step % 300 == 0:
+                  print(f"step {step}  loss {loss.item():.3f}  mem {torch.cuda.memory_allocated()/1024**2:.0f}MiB", flush=True)
+          print(f"done 3000 steps in {time.time()-t:.1f}s", flush=True)
+        resources:
+          limits:
+            # Just ask for a vGPU. HAMi applies the cluster default slice
+            # (defaultMemory=3800 MiB) and the job physically CANNOT exceed it --
+            # the log line above prints visible_mem=3800MiB to prove it.
+            # 4 of these fit on one 16 GiB T4.
+            nvidia.com/gpu: 1
+            # Override per-job when a workload needs a different shape, e.g.:
+            #   nvidia.com/gpumem: 7000     # a bigger 7 GiB slice (2 per card)
+            #   nvidia.com/gpucores: 50     # cap compute at 50% of the card
+            # Sizes must divide into the card: sum(gpumem) <= 15360 on a T4.

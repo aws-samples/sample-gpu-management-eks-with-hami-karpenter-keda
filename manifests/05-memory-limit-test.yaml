@@ -1,0 +1,35 @@
+# Proof that the memory cap is enforced (an OOM demo).
+#
+# This Job requests a 2 GiB device-memory slice, then uses PyTorch to try to
+# allocate ~4 GiB on the GPU. HAMi caps the container at 2 GiB, so the
+# allocation fails with a CUDA out-of-memory error even though the physical
+# T4 has 16 GiB free. That failure IS the demo: the limit is real.
+#
+#   kubectl apply -f examples/03-memory-limit-test.yaml
+#   kubectl logs -f job/hami-oom-test
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hami-oom-test
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: torch
+          image: pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+          command:
+            - python
+            - -c
+            - |
+              import torch
+              print("Visible GPU memory (GiB):",
+                    round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))
+              print("Attempting to allocate ~4 GiB (cap is 2 GiB)...")
+              x = torch.empty(4 * 1024**3 // 4, dtype=torch.float32, device="cuda")
+              print("Unexpected success:", x.shape)
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 2000  # 2 GiB cap -> the 4 GiB alloc must fail
