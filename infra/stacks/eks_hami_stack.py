@@ -425,37 +425,188 @@ class EksHamiStack(Stack):
         sa = cluster.add_service_account(
             "KarpenterSa", name="karpenter", namespace="kube-system"
         )
-        # Broad EC2 for the test cluster; scope down for production.
+        # --- Least-privilege controller policy --------------------------------
+        # Modelled on the official Karpenter controller policy
+        # (karpenter-provider-aws getting-started cloudformation.yaml), reduced
+        # further for this stack:
+        #   * no instance-profile write actions: the profile is pre-created above,
+        #     so Karpenter only reads it (spec.instanceProfile, not spec.role);
+        #   * no SQS actions: the interruption queue is disabled (on-demand only).
+        # Mutating actions are restricted to resources carrying this cluster's
+        # ownership tag, so the controller cannot touch unrelated EC2 resources.
+        part, region, account = self.partition, self.region, self.account
+        cluster_tag = f"aws:ResourceTag/kubernetes.io/cluster/{self.config.cluster_name}"
+        req_cluster_tag = f"aws:RequestTag/kubernetes.io/cluster/{self.config.cluster_name}"
+        owned_by_this_cluster = {
+            "StringEquals": {cluster_tag: "owned"},
+            "StringLike": {"aws:ResourceTag/karpenter.sh/nodepool": "*"},
+        }
+        tagged_for_this_cluster = {
+            "StringEquals": {req_cluster_tag: "owned"},
+            "StringLike": {"aws:RequestTag/karpenter.sh/nodepool": "*"},
+        }
+        launch_targets = [
+            f"arn:{part}:ec2:{region}::image/*",
+            f"arn:{part}:ec2:{region}::snapshot/*",
+            f"arn:{part}:ec2:{region}:*:security-group/*",
+            f"arn:{part}:ec2:{region}:*:subnet/*",
+            f"arn:{part}:ec2:{region}:*:capacity-reservation/*",
+            f"arn:{part}:ec2:{region}:*:placement-group/*",
+        ]
+        created_resources = [
+            f"arn:{part}:ec2:{region}:*:fleet/*",
+            f"arn:{part}:ec2:{region}:*:instance/*",
+            f"arn:{part}:ec2:{region}:*:volume/*",
+            f"arn:{part}:ec2:{region}:*:network-interface/*",
+            f"arn:{part}:ec2:{region}:*:launch-template/*",
+            f"arn:{part}:ec2:{region}:*:spot-instances-request/*",
+        ]
+
+        # Read-only discovery, confined to this region.
         sa.add_to_principal_policy(
             iam.PolicyStatement(
-                actions=["ec2:*"], resources=["*"]
+                sid="AllowRegionalReadActions",
+                actions=[
+                    "ec2:DescribeAvailabilityZones",
+                    "ec2:DescribeCapacityReservations",
+                    "ec2:DescribeImages",
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeInstanceStatus",
+                    "ec2:DescribeInstanceTypeOfferings",
+                    "ec2:DescribeInstanceTypes",
+                    "ec2:DescribeLaunchTemplates",
+                    "ec2:DescribePlacementGroups",
+                    "ec2:DescribeSecurityGroups",
+                    "ec2:DescribeSpotPriceHistory",
+                    "ec2:DescribeSubnets",
+                ],
+                resources=["*"],  # Describe* actions do not support resource ARNs
+                conditions={"StringEquals": {"aws:RequestedRegion": region}},
+            )
+        )
+        # Launch: may only reference AMIs, subnets and security groups in region.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedEC2InstanceAccessActions",
+                actions=["ec2:RunInstances", "ec2:CreateFleet"],
+                resources=launch_targets,
+            )
+        )
+        # Launch from a launch template only if this cluster owns it.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedEC2LaunchTemplateAccessActions",
+                actions=["ec2:RunInstances", "ec2:CreateFleet"],
+                resources=[f"arn:{part}:ec2:{region}:*:launch-template/*"],
+                conditions=owned_by_this_cluster,
+            )
+        )
+        # Create instances/volumes/ENIs/templates only when tagged to this cluster.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedEC2InstanceActionsWithTags",
+                actions=["ec2:RunInstances", "ec2:CreateFleet", "ec2:CreateLaunchTemplate"],
+                resources=created_resources,
+                conditions=tagged_for_this_cluster,
+            )
+        )
+        # Tag only at creation time, and only with this cluster's tags.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedResourceCreationTagging",
+                actions=["ec2:CreateTags"],
+                resources=created_resources,
+                conditions={
+                    "StringEquals": {
+                        req_cluster_tag: "owned",
+                        "ec2:CreateAction": [
+                            "RunInstances",
+                            "CreateFleet",
+                            "CreateLaunchTemplate",
+                        ],
+                    },
+                    "StringLike": {"aws:RequestTag/karpenter.sh/nodepool": "*"},
+                },
+            )
+        )
+        # Re-tag existing instances (nodeclaim linking) for owned instances only.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedResourceTagging",
+                actions=["ec2:CreateTags"],
+                resources=[f"arn:{part}:ec2:{region}:*:instance/*"],
+                conditions={
+                    "StringEquals": {cluster_tag: "owned"},
+                    "StringLike": {"aws:ResourceTag/karpenter.sh/nodepool": "*"},
+                    "ForAllValues:StringEquals": {
+                        "aws:TagKeys": ["karpenter.sh/nodeclaim", "Name"]
+                    },
+                },
+            )
+        )
+        # Terminate / delete only what this cluster owns.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowScopedDeletion",
+                actions=["ec2:TerminateInstances", "ec2:DeleteLaunchTemplate"],
+                resources=[
+                    f"arn:{part}:ec2:{region}:*:instance/*",
+                    f"arn:{part}:ec2:{region}:*:launch-template/*",
+                ],
+                conditions=owned_by_this_cluster,
+            )
+        )
+        # AMI ID lookup for the AL2023 GPU alias, restricted to the AWS namespace.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowSSMReadActions",
+                actions=["ssm:GetParameter"],
+                resources=[f"arn:{part}:ssm:{region}::parameter/aws/service/*"],
+            )
+        )
+        # Instance-type pricing for consolidation decisions.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowPricingReadActions",
+                actions=["pricing:GetProducts"],
+                resources=["*"],  # pricing:GetProducts does not support ARNs
+            )
+        )
+        # Cluster endpoint / CA discovery, this cluster only.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowAPIServerEndpointDiscovery",
+                actions=["eks:DescribeCluster"],
+                resources=[
+                    f"arn:{part}:eks:{region}:{account}:cluster/{self.config.cluster_name}"
+                ],
+            )
+        )
+        # Pass ONLY the node role, and only to EC2.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowPassingInstanceRole",
+                actions=["iam:PassRole"],
+                resources=[node_role.role_arn],
+                conditions={
+                    "StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}
+                },
+            )
+        )
+        # Read the pre-created instance profile. No write actions: this stack
+        # creates the profile itself, so Karpenter never manages one.
+        sa.add_to_principal_policy(
+            iam.PolicyStatement(
+                sid="AllowInstanceProfileReadActions",
+                actions=["iam:GetInstanceProfile"],
+                resources=[f"arn:{part}:iam::{account}:instance-profile/*"],
             )
         )
         sa.add_to_principal_policy(
             iam.PolicyStatement(
-                actions=[
-                    "ssm:GetParameter",
-                    "pricing:GetProducts",
-                    "eks:DescribeCluster",
-                ],
-                resources=["*"],
-            )
-        )
-        sa.add_to_principal_policy(
-            iam.PolicyStatement(actions=["iam:PassRole"], resources=[node_role.role_arn])
-        )
-        # Karpenter manages an instance profile for the node role (EC2NodeClass.role).
-        sa.add_to_principal_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "iam:CreateInstanceProfile",
-                    "iam:AddRoleToInstanceProfile",
-                    "iam:RemoveRoleFromInstanceProfile",
-                    "iam:DeleteInstanceProfile",
-                    "iam:GetInstanceProfile",
-                    "iam:TagInstanceProfile",
-                ],
-                resources=["*"],
+                sid="AllowUnscopedInstanceProfileListAction",
+                actions=["iam:ListInstanceProfiles"],
+                resources=["*"],  # iam:ListInstanceProfiles does not support ARNs
             )
         )
 

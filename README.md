@@ -336,8 +336,14 @@ Full matrix: [docs/07-troubleshooting.md](docs/07-troubleshooting.md).
 - No credentials are stored in this repository. All manifests use placeholders; real
   values are substituted locally by `scripts/render-manifests.sh` into a gitignored
   directory.
-- The CDK stack grants Karpenter broad `ec2:*` for demo simplicity. **Scope this down
-  before production use** — see the comment in `infra/stacks/eks_hami_stack.py`.
+- The Karpenter controller policy follows least privilege. It grants only the specific
+  EC2 actions Karpenter needs, with mutating actions (`RunInstances`, `CreateFleet`,
+  `CreateTags`, `TerminateInstances`, `DeleteLaunchTemplate`) restricted to resources
+  tagged as owned by this cluster, read-only `Describe*` actions constrained by
+  `aws:RequestedRegion`, and `iam:PassRole` limited to the single node role and to the
+  EC2 service. There are no service-level or resource-level wildcards. Because the
+  stack pre-creates the node instance profile, the controller is granted no
+  instance-profile write actions at all.
 - Third-party Helm charts and container images are pulled from their upstream
   publishers at setup time and mirrored into your own ECR; nothing third-party is
   vendored here.
