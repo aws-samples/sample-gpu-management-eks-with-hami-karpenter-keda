@@ -109,8 +109,8 @@ See [docs/01-prerequisites.md](docs/01-prerequisites.md) for install commands.
 ## Quick start
 
 ```bash
-git clone https://github.com/aws-samples/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/aws-samples/sample-gpu-management-eks-with-hami-karpenter-keda.git
+cd sample-gpu-management-eks-with-hami-karpenter-keda
 
 # 1. Python env for CDK (must be 3.10+)
 python3 -m venv infra/.venv && . infra/.venv/bin/activate
